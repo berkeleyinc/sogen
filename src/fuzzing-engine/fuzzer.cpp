@@ -1,5 +1,7 @@
 #include "fuzzer.hpp"
 #include <cinttypes>
+#include <filesystem>
+#include <fstream>
 
 #include "input_generator.hpp"
 
@@ -92,10 +94,47 @@ namespace sogen::fuzzer
             return data;
         }
 
+        uint64_t hash_input(const std::span<const uint8_t> input)
+        {
+            uint64_t hash = 0xcbf29ce484222325ULL;
+
+            for (const auto byte : input)
+            {
+                hash = (hash ^ byte) * 0x100000001b3ULL;
+            }
+
+            return hash;
+        }
+
+        // Named by content so repeated hits of the same input collapse into one file.
+        std::filesystem::path save_crash(const std::span<const uint8_t> input)
+        {
+            const auto path = std::filesystem::path{"crashes"} /
+                              sogen::utils::string::va("crash-%016" PRIx64 "-%zu.bin", hash_input(input), input.size());
+
+            std::error_code error{};
+            std::filesystem::create_directories(path.parent_path(), error);
+
+            if (!std::filesystem::exists(path, error))
+            {
+                std::ofstream file{path, std::ios::binary};
+                file.write(reinterpret_cast<const char*>(input.data()), static_cast<std::streamsize>(input.size()));
+            }
+
+            return path;
+        }
+
         void print_crash(const std::span<const uint8_t> input)
         {
-            std::string text = sogen::utils::string::va("\nFound crash for input (length %zu):\n", input.size());
-            text += format_binary_data(input);
+            const auto path = save_crash(input);
+
+            // Multi-hundred-kB inputs would otherwise flood the log with a full hexdump; the file has it all.
+            constexpr size_t max_dump = 256;
+            const auto dump = input.subspan(0, std::min(input.size(), max_dump));
+
+            std::string text = sogen::utils::string::va("\nFound crash for input (length %zu, saved to %s%s):\n", input.size(),
+                                                        path.string().c_str(), input.size() > max_dump ? ", dump truncated" : "");
+            text += format_binary_data(dump);
 
             printf("%.*s\n", static_cast<int>(text.size()), text.c_str());
         }
@@ -178,6 +217,7 @@ namespace sogen::fuzzer
             const auto highest_scorer = context.generator.get_highest_scorer();
             const auto avg_score = context.generator.get_average_score();
             printf("Executions/s: %" PRIu64 " - Score: %" PRIx64 " - Avg: %.3f\n", executions, highest_scorer.score, avg_score);
+            fflush(stdout);
         }
 
         const auto duration = t.elapsed();

@@ -1,12 +1,24 @@
 #include "input_generator.hpp"
 
 #include <cassert>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 
 namespace sogen::fuzzer
 {
     namespace
     {
         constexpr size_t MAX_TOP_SCORER = 20;
+
+        // Optional initial corpus: mutations start from noise otherwise, which never reaches the parser of a
+        // target that needs a real file format (e.g. a PDF).
+        std::filesystem::path get_seed_directory()
+        {
+            const char* path = std::getenv("FUZZ_SEEDS");
+            return (path != nullptr && path[0] != '\0') ? std::filesystem::path{path} : std::filesystem::path{};
+        }
 
         void mutate_input(random_generator& rng, std::vector<uint8_t>& input)
         {
@@ -31,7 +43,52 @@ namespace sogen::fuzzer
         }
     }
 
-    input_generator::input_generator() = default;
+    input_generator::input_generator()
+    {
+        this->load_seeds();
+    }
+
+    void input_generator::load_seeds()
+    {
+        const auto directory = get_seed_directory();
+        if (directory.empty())
+        {
+            return;
+        }
+
+        std::error_code ec{};
+        if (!std::filesystem::is_directory(directory, ec))
+        {
+            return;
+        }
+
+        for (const auto& file : std::filesystem::directory_iterator{directory, ec})
+        {
+            if (this->top_scorer_.size() >= MAX_TOP_SCORER)
+            {
+                break;
+            }
+
+            if (!file.is_regular_file(ec))
+            {
+                continue;
+            }
+
+            std::ifstream stream{file.path(), std::ios::binary};
+            input_entry entry{};
+            entry.data = {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+
+            if (!entry.data.empty())
+            {
+                this->top_scorer_.emplace_back(std::move(entry));
+            }
+        }
+
+        if (!this->top_scorer_.empty())
+        {
+            this->highest_scorer_ = this->top_scorer_.front();
+        }
+    }
 
     std::vector<uint8_t> input_generator::generate_next_input()
     {

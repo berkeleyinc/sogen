@@ -39,6 +39,8 @@ namespace sogen::fuzzer
 
         std::vector<uint8_t> generate_next_input();
 
+        void load_seeds();
+
         void store_input_entry(input_entry entry);
     };
 } // namespace sogen::fuzzer

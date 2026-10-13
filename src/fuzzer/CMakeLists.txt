@@ -17,6 +17,8 @@ endif()
 target_link_libraries(fuzzer PRIVATE
   fuzzing-engine
   windows-emulator
+  backend-selection
+  cli11
 )
 
 if (SOGEN_ENABLE_RUST)
