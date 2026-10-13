@@ -241,7 +241,17 @@ namespace sogen
 
         std::vector<uint8_t> data{};
 
-        const auto layout_matches = previous_layout_version == this->layout_version_.load() && previous_dep_enabled == this->dep_enabled_;
+        // Debug knob to compare against the unconditional unmap/remap path.
+        static const bool reuse_disabled = std::getenv("SOGEN_NO_MEMORY_REUSE") != nullptr;
+
+        // MMIO mappings are not host RAM bound to the guest layout - they are re-established lazily by their
+        // device - and are handled by the unmapping path.
+        const auto has_mmio = [](const reserved_region_map& regions) {
+            return std::ranges::any_of(regions, [](const auto& entry) { return entry.second.kind == memory_region_kind::mmio; });
+        };
+
+        const auto layout_matches = !reuse_disabled && !has_mmio(previous_regions) && !has_mmio(this->reserved_regions_) &&
+                                    previous_layout_version == this->layout_version_.load() && previous_dep_enabled == this->dep_enabled_;
 
         if (!layout_matches)
         {
@@ -256,28 +266,10 @@ namespace sogen
 
         // MMIO mappings are not part of the snapshot: drop them so the owning device re-establishes them on
         // the next access, exactly like a full unmap would.
-        std::set<uint64_t> mmio_addresses{};
-
-        for (const auto& reserved_region : previous_regions)
-        {
-            if (reserved_region.second.kind == memory_region_kind::mmio)
-            {
-                for (const auto& region : reserved_region.second.committed_regions)
-                {
-                    mmio_addresses.insert(region.first);
-                }
-            }
-        }
-
         for (auto i = this->reserved_regions_.begin(); i != this->reserved_regions_.end();)
         {
             if (i->second.kind == memory_region_kind::mmio)
             {
-                for (const auto& region : i->second.committed_regions)
-                {
-                    mmio_addresses.insert(region.first);
-                }
-
                 i = this->reserved_regions_.erase(i);
                 continue;
             }
@@ -288,17 +280,6 @@ namespace sogen
         if (layout_matches)
         {
             auto previous_mappings = collect_committed_mappings(previous_regions);
-
-            for (const auto& address : mmio_addresses)
-            {
-                const auto existing = previous_mappings.find(address);
-
-                if (existing != previous_mappings.end())
-                {
-                    this->unmap_memory(existing->first, existing->second.first);
-                    previous_mappings.erase(existing);
-                }
-            }
 
             for (const auto& reserved_region : this->reserved_regions_)
             {
@@ -312,15 +293,23 @@ namespace sogen
                         continue;
                     }
 
+                    // Copy before erasing, the iterator's node is gone afterwards.
+                    const auto live_length = existing->second.first;
+                    const auto live_permissions = existing->second.second;
                     previous_mappings.erase(existing);
+
+                    if (live_length == region.second.length && live_permissions == region.second.permissions)
+                    {
+                        continue;
+                    }
 
                     // Reuse the overlapping part instead of unmapping/remapping the whole region: the guest
                     // resizes its heap and stacks between restores, and those regions are the large ones.
-                    const auto shared_length = std::min(existing->second.first, region.second.length);
+                    const auto shared_length = std::min(live_length, region.second.length);
 
-                    if (existing->second.first > shared_length)
+                    if (live_length > shared_length)
                     {
-                        this->unmap_memory(region.first + shared_length, existing->second.first - shared_length);
+                        this->unmap_memory(region.first + shared_length, live_length - shared_length);
                     }
 
                     if (region.second.length > shared_length)
@@ -328,7 +317,7 @@ namespace sogen
                         this->map_memory(region.first + shared_length, region.second.length - shared_length,
                                          this->get_effective_permissions(region.second.permissions));
                     }
-                    else if (existing->second.second != region.second.permissions)
+                    else if (live_permissions != region.second.permissions)
                     {
                         this->apply_memory_protection(region.first, shared_length,
                                                       this->get_effective_permissions(region.second.permissions));
