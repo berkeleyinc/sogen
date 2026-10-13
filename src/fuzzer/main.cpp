@@ -103,9 +103,9 @@ namespace sogen
 
             for (const auto pixel : pixels)
             {
-                const char rgb[3] = {static_cast<char>((pixel >> 16) & 0xFF), static_cast<char>((pixel >> 8) & 0xFF),
-                                     static_cast<char>(pixel & 0xFF)};
-                file.write(rgb, sizeof(rgb));
+                const std::array<char, 3> rgb = {static_cast<char>((pixel >> 16) & 0xFF), static_cast<char>((pixel >> 8) & 0xFF),
+                                                 static_cast<char>(pixel & 0xFF)};
+                file.write(rgb.data(), rgb.size());
             }
         }
 
@@ -271,9 +271,8 @@ namespace sogen
                     static std::atomic<uint32_t> reported{};
                     if (reported.fetch_add(1) < 3)
                     {
-                        fprintf(stderr, "[fuzzer] iteration with %zu blocks, %llu instructions, exit status %x\n",
-                                this->visited_blocks.size(), static_cast<unsigned long long>(emu.get_executed_instructions()),
-                                emu.process.exit_status);
+                        fprintf(stderr, "[fuzzer] iteration with %zu blocks, %zu instructions, exit status %x\n",
+                                this->visited_blocks.size(), static_cast<size_t>(emu.get_executed_instructions()), emu.process.exit_status);
                     }
                 }
 
