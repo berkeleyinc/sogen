@@ -308,6 +308,7 @@ namespace sogen
 
             for (const auto& argument : options.arguments)
             {
+                fprintf(stderr, "[fuzzer] arg: '%s'\n", argument.c_str());
                 application_settings.arguments.emplace_back(argument.begin(), argument.end());
             }
 
