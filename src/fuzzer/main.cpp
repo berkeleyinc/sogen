@@ -96,8 +96,7 @@ namespace sogen
             return target;
         }
 
-        void write_ppm(const std::filesystem::path& path, const uint32_t width, const uint32_t height,
-                       const std::vector<uint32_t>& pixels)
+        void write_ppm(const std::filesystem::path& path, const uint32_t width, const uint32_t height, const std::vector<uint32_t>& pixels)
         {
             std::ofstream file{path, std::ios::binary | std::ios::trunc};
             file << "P6\n" << width << " " << height << "\n255\n";
@@ -272,8 +271,9 @@ namespace sogen
                     static std::atomic<uint32_t> reported{};
                     if (reported.fetch_add(1) < 3)
                     {
-                        fprintf(stderr, "[fuzzer] iteration with %zu blocks, %llu instructions, exit status %x\n", this->visited_blocks.size(),
-                                static_cast<unsigned long long>(emu.get_executed_instructions()), emu.process.exit_status);
+                        fprintf(stderr, "[fuzzer] iteration with %zu blocks, %llu instructions, exit status %x\n",
+                                this->visited_blocks.size(), static_cast<unsigned long long>(emu.get_executed_instructions()),
+                                emu.process.exit_status);
                     }
                 }
 

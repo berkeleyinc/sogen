@@ -3762,8 +3762,8 @@ namespace sogen
                         if (mask_x >= 0 && mask_y >= 0 && mask_x < static_cast<int64_t>(mask_surface->width) &&
                             mask_y < static_cast<int64_t>(mask_surface->height))
                         {
-                            const auto mask_pixel = mask_surface->pixels[static_cast<size_t>(mask_y) * mask_surface->width +
-                                                                         static_cast<size_t>(mask_x)];
+                            const auto mask_pixel =
+                                mask_surface->pixels[static_cast<size_t>(mask_y) * mask_surface->width + static_cast<size_t>(mask_x)];
                             mask_bit = (mask_pixel & 0x00FFFFFFu) != 0;
                         }
                     }
