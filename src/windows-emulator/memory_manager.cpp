@@ -197,12 +197,37 @@ namespace sogen
         }
     }
 
+    namespace
+    {
+        using committed_mapping = std::pair<size_t, nt_memory_permission>;
+
+        // Every host-backed guest mapping, so a restore can tell which of the mappings it already has are
+        // still the ones the restored layout needs.
+        std::map<uint64_t, committed_mapping> collect_committed_mappings(const memory_manager::reserved_region_map& regions)
+        {
+            std::map<uint64_t, committed_mapping> mappings{};
+
+            for (const auto& reserved_region : regions)
+            {
+                for (const auto& region : reserved_region.second.committed_regions)
+                {
+                    mappings.emplace(region.first, committed_mapping{region.second.length, region.second.permissions});
+                }
+            }
+
+            return mappings;
+        }
+    }
+
     void memory_manager::deserialize_memory_state(utils::buffer_deserializer& buffer, const bool is_snapshot)
     {
-        if (!is_snapshot)
-        {
-            assert(this->reserved_regions_.empty());
-        }
+        // A restore normally finds the mappings it left behind: the guest layout only changes when the guest
+        // maps or unmaps memory. Keeping the mappings that did not change avoids a backend unmap/map round
+        // trip per region, which dominates the restore time.
+        auto previous_regions = std::move(this->reserved_regions_);
+        const auto previous_layout_version = this->layout_version_.load();
+        const auto previous_dep_enabled = this->dep_enabled_;
+        this->reserved_regions_.clear();
 
         buffer.read_atomic(this->layout_version_);
         buffer.read(this->default_allocation_address_);
@@ -216,25 +241,125 @@ namespace sogen
 
         std::vector<uint8_t> data{};
 
+        const auto layout_matches = previous_layout_version == this->layout_version_.load() && previous_dep_enabled == this->dep_enabled_;
+
+        if (!layout_matches)
+        {
+            for (const auto& reserved_region : previous_regions)
+            {
+                for (const auto& region : reserved_region.second.committed_regions)
+                {
+                    this->unmap_memory(region.first, region.second.length);
+                }
+            }
+        }
+
+        // MMIO mappings are not part of the snapshot: drop them so the owning device re-establishes them on
+        // the next access, exactly like a full unmap would.
+        std::set<uint64_t> mmio_addresses{};
+
+        for (const auto& reserved_region : previous_regions)
+        {
+            if (reserved_region.second.kind == memory_region_kind::mmio)
+            {
+                for (const auto& region : reserved_region.second.committed_regions)
+                {
+                    mmio_addresses.insert(region.first);
+                }
+            }
+        }
+
         for (auto i = this->reserved_regions_.begin(); i != this->reserved_regions_.end();)
         {
-            auto& reserved_region = i->second;
-            if (reserved_region.kind == memory_region_kind::mmio)
+            if (i->second.kind == memory_region_kind::mmio)
             {
+                for (const auto& region : i->second.committed_regions)
+                {
+                    mmio_addresses.insert(region.first);
+                }
+
                 i = this->reserved_regions_.erase(i);
                 continue;
             }
 
             ++i;
+        }
 
-            for (const auto& region : reserved_region.committed_regions)
+        if (layout_matches)
+        {
+            auto previous_mappings = collect_committed_mappings(previous_regions);
+
+            for (const auto& address : mmio_addresses)
+            {
+                const auto existing = previous_mappings.find(address);
+
+                if (existing != previous_mappings.end())
+                {
+                    this->unmap_memory(existing->first, existing->second.first);
+                    previous_mappings.erase(existing);
+                }
+            }
+
+            for (const auto& reserved_region : this->reserved_regions_)
+            {
+                for (const auto& region : reserved_region.second.committed_regions)
+                {
+                    const auto existing = previous_mappings.find(region.first);
+
+                    if (existing == previous_mappings.end())
+                    {
+                        this->map_memory(region.first, region.second.length, this->get_effective_permissions(region.second.permissions));
+                        continue;
+                    }
+
+                    previous_mappings.erase(existing);
+
+                    // Reuse the overlapping part instead of unmapping/remapping the whole region: the guest
+                    // resizes its heap and stacks between restores, and those regions are the large ones.
+                    const auto shared_length = std::min(existing->second.first, region.second.length);
+
+                    if (existing->second.first > shared_length)
+                    {
+                        this->unmap_memory(region.first + shared_length, existing->second.first - shared_length);
+                    }
+
+                    if (region.second.length > shared_length)
+                    {
+                        this->map_memory(region.first + shared_length, region.second.length - shared_length,
+                                         this->get_effective_permissions(region.second.permissions));
+                    }
+                    else if (existing->second.second != region.second.permissions)
+                    {
+                        this->apply_memory_protection(region.first, shared_length,
+                                                      this->get_effective_permissions(region.second.permissions));
+                    }
+                }
+            }
+
+            // Whatever the guest mapped on top of the snapshot is gone.
+            for (const auto& mapping : previous_mappings)
+            {
+                this->unmap_memory(mapping.first, mapping.second.first);
+            }
+        }
+        else
+        {
+            for (const auto& reserved_region : this->reserved_regions_)
+            {
+                for (const auto& region : reserved_region.second.committed_regions)
+                {
+                    this->map_memory(region.first, region.second.length, this->get_effective_permissions(region.second.permissions));
+                }
+            }
+        }
+
+        for (const auto& reserved_region : this->reserved_regions_)
+        {
+            for (const auto& region : reserved_region.second.committed_regions)
             {
                 data.resize(region.second.length);
 
                 buffer.read(data.data(), region.second.length);
-
-                const auto effective_permission = this->get_effective_permissions(region.second.permissions);
-                this->map_memory(region.first, region.second.length, effective_permission);
                 this->write_memory(region.first, data.data(), region.second.length);
             }
         }
@@ -957,19 +1082,6 @@ namespace sogen
         this->release_host_claims(aligned_end);
         this->update_layout_version();
         return true;
-    }
-
-    void memory_manager::unmap_all_memory()
-    {
-        for (const auto& reserved_region : this->reserved_regions_)
-        {
-            for (const auto& region : reserved_region.second.committed_regions)
-            {
-                this->unmap_memory(region.first, region.second.length);
-            }
-        }
-
-        this->reserved_regions_.clear();
     }
 
     namespace

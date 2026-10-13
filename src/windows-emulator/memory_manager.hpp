@@ -137,8 +137,6 @@ namespace sogen
         bool replace_placeholder(uint64_t address, size_t size, nt_memory_permission permissions, bool commit);
         bool preserve_placeholder(uint64_t address, size_t size);
 
-        void unmap_all_memory();
-
         uint64_t allocate_memory(size_t size, nt_memory_permission permissions, bool reserve_only = false, uint64_t start = 0,
                                  memory_region_kind kind = memory_region_kind::private_allocation);
 

@@ -1851,7 +1851,6 @@ namespace sogen
         this->registry.deserialize_runtime_state(buffer);
 
         this->process.prepare_for_state_restore(*this);
-        this->memory.unmap_all_memory();
         this->clear_section_first_execution_hooks();
         this->ui().reset();
         this->audio().stop();
@@ -1908,7 +1907,6 @@ namespace sogen
         this->registry.deserialize_runtime_state(buffer);
 
         this->process.prepare_for_state_restore(*this);
-        this->memory.unmap_all_memory();
         this->clear_section_first_execution_hooks();
         this->ui().reset();
         this->audio().stop();
