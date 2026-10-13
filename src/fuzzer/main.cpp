@@ -43,7 +43,24 @@ namespace sogen
                 };
 
                 win_emu.log.disable_output(true);
-                win_emu.start(static_cast<size_t>(budget));
+
+                // GUI targets block in their message loop once they are done with the testcase: they execute
+                // no instructions anymore, so an instruction budget alone would never be reached. Run in
+                // slices and stop as soon as the guest stops making progress (or the budget is used up).
+                constexpr size_t slice_instructions = 1u << 25;
+                const auto start_instructions = win_emu.get_executed_instructions();
+
+                for (;;)
+                {
+                    win_emu.start(slice_instructions);
+
+                    const auto executed = win_emu.get_executed_instructions() - start_instructions;
+
+                    if (executed == 0 || (budget != 0 && executed >= budget))
+                    {
+                        break;
+                    }
+                }
 
                 if (has_exception)
                 {
