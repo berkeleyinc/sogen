@@ -1,0 +1,13 @@
+[package]
+name = "icicle-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+icicle-vm = { path = "../icicle-vm" }
+anyhow = { workspace = true }
+pcode = { workspace = true }
+sleigh-runtime = { workspace = true }
+target-lexicon = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3.18", default-features = false, features = ["fmt", "env-filter", "ansi", "tracing-log"] }

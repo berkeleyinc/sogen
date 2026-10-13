@@ -6,7 +6,10 @@ edition = "2024"
 [lib]
 crate-type = ["staticlib"]
 
+# Vendored at deps/icicle (revision `3292602` of https://github.com/icicle-emu/icicle-emu) so the SLEIGH
+# pcodeop helpers icicle ships can be extended: without a `pshufb` helper the backend raises
+# `UnimplementedOp` (guest #UD) on any SSSE3 code, e.g. lcms2's byte swap.
 [dependencies]
-icicle-vm = { git = "https://github.com/icicle-emu/icicle-emu" }
-icicle-cpu = { git = "https://github.com/icicle-emu/icicle-emu" }
-pcode = { git = "https://github.com/icicle-emu/icicle-emu" }
+icicle-vm = { path = "../../../../deps/icicle/icicle-vm" }
+icicle-cpu = { path = "../../../../deps/icicle/icicle-cpu" }
+pcode = { path = "../../../../deps/icicle/sleigh/pcode" }

@@ -449,7 +449,6 @@ dependencies = [
 [[package]]
 name = "icicle-cpu"
 version = "0.1.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#3292602fd4857b53ed653dec69398efe4cdb435e"
 dependencies = [
  "addr2line",
  "ahash",
@@ -469,7 +468,6 @@ dependencies = [
 [[package]]
 name = "icicle-jit"
 version = "0.2.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#3292602fd4857b53ed653dec69398efe4cdb435e"
 dependencies = [
  "cranelift",
  "cranelift-codegen",
@@ -487,7 +485,6 @@ dependencies = [
 [[package]]
 name = "icicle-linux"
 version = "0.1.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#3292602fd4857b53ed653dec69398efe4cdb435e"
 dependencies = [
  "bitflags 2.9.0",
  "bstr",
@@ -503,7 +500,6 @@ dependencies = [
 [[package]]
 name = "icicle-mem"
 version = "0.3.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#3292602fd4857b53ed653dec69398efe4cdb435e"
 dependencies = [
  "ahash",
  "tracing",
@@ -512,7 +508,6 @@ dependencies = [
 [[package]]
 name = "icicle-vm"
 version = "0.2.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#3292602fd4857b53ed653dec69398efe4cdb435e"
 dependencies = [
  "anyhow",
  "icicle-cpu",
@@ -644,7 +639,6 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 [[package]]
 name = "pcode"
 version = "0.2.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#3292602fd4857b53ed653dec69398efe4cdb435e"
 
 [[package]]
 name = "pin-project-lite"
@@ -794,7 +788,6 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "sleigh-compile"
 version = "0.3.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#3292602fd4857b53ed653dec69398efe4cdb435e"
 dependencies = [
  "pcode",
  "serde",
@@ -807,12 +800,10 @@ dependencies = [
 [[package]]
 name = "sleigh-parse"
 version = "0.3.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#3292602fd4857b53ed653dec69398efe4cdb435e"
 
 [[package]]
 name = "sleigh-runtime"
 version = "0.1.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#3292602fd4857b53ed653dec69398efe4cdb435e"
 dependencies = [
  "ahash",
  "pcode",

@@ -1,0 +1,17 @@
+[package]
+name = "afl-icicle-trace"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+icicle-vm = { path = "../icicle-vm" }
+icicle-fuzzing = { path = "../icicle-fuzzing" }
+icicle-gdb = { path = "../icicle-gdb" }
+anyhow = { workspace = true }
+target-lexicon = { workspace = true }
+pcode = { workspace = true }
+bstr = { version = "1.9.1", default-features = false }
+libc = "0.2.153"
+serde_json = "1.0.115"
+tracing = { workspace = true, features = ["release_max_level_trace"] }
+tracing-subscriber = { version = "0.3.18", default-features = false, features = ["fmt", "env-filter", "ansi"] }
