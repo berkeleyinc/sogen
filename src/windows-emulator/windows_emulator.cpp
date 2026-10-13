@@ -1710,6 +1710,7 @@ namespace sogen
             const auto region = this->memory.get_region_info(address);
             std::array<char, 256> buffer{};
             std::snprintf(buffer.data(), buffer.size(), "%s+0x%llx [%s]", mod ? mod->name.c_str() : "?",
+                          // NOLINTNEXTLINE(google-runtime-int)
                           mod ? static_cast<unsigned long long>(address - mod->image_base) : address,
                           region.is_committed ? "committed" : "FREE/reserved");
             return buffer.data();

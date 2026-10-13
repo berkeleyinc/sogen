@@ -598,12 +598,15 @@ namespace sogen::icicle
             if (kind == icicle_stop_kind::unhandled_exception)
             {
                 std::snprintf(message.data(), message.size(), "Icicle stopped on unhandled exception: code=0x%X value=0x%llX rip=0x%llX",
+                              // NOLINTNEXTLINE(google-runtime-int)
                               info.code, static_cast<unsigned long long>(info.value),
+                              // NOLINTNEXTLINE(google-runtime-int)
                               static_cast<unsigned long long>(this->read_instruction_pointer()));
             }
             else
             {
                 std::snprintf(message.data(), message.size(), "Icicle stopped on unhandled VM exit at rip=0x%llX",
+                              // NOLINTNEXTLINE(google-runtime-int)
                               static_cast<unsigned long long>(this->read_instruction_pointer()));
             }
 

@@ -213,6 +213,7 @@ namespace sogen::steam_host
         g_handles[handle] = {.version = std::string(version), .iface = iface};
         if (std::getenv("SOGEN_STEAM_TRACE"))
         {
+            // NOLINTNEXTLINE(google-runtime-int)
             std::fprintf(stderr, "[steam-returned-iface] version=%s -> handle=%llu\n", version, static_cast<unsigned long long>(handle));
             std::fflush(stderr);
         }
@@ -351,6 +352,7 @@ extern "C" int sogen_steam_backend_invoke(uint64_t handle, uint32_t method, cons
 
     if (std::getenv("SOGEN_STEAM_TRACE"))
     {
+        // NOLINTNEXTLINE(google-runtime-int)
         std::fprintf(stderr, "[steam-invoke] version=%s method=%u handle=%llu\n", version, method, static_cast<unsigned long long>(handle));
         std::fflush(stderr);
     }
@@ -376,6 +378,7 @@ extern "C" int sogen_steam_backend_invoke(uint64_t handle, uint32_t method, cons
     if (std::getenv("SOGEN_STEAM_TRACE"))
     {
         std::fprintf(stderr, "[steam-invoke] version=%s method=%u -> status=%d ret=%llu\n", version, method, status,
+                     // NOLINTNEXTLINE(google-runtime-int)
                      static_cast<unsigned long long>(ret ? *ret : 0));
         std::fflush(stderr);
     }
@@ -526,6 +529,7 @@ extern "C" int sogen_steam_backend_get_api_call_result(int32_t pipe, uint64_t ca
     const bool ok = g_getapicallresult(use_pipe, call, out, static_cast<int32_t>(n), callback_id, &failed);
     if (std::getenv("SOGEN_STEAM_TRACE"))
     {
+        // NOLINTNEXTLINE(google-runtime-int)
         std::fprintf(stderr, "[steam-callresult] call=%llu callback_id=%d -> ok=%d failed=%d\n", static_cast<unsigned long long>(call),
                      callback_id, ok ? 1 : 0, failed ? 1 : 0);
         std::fflush(stderr);
