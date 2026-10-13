@@ -3620,6 +3620,163 @@ namespace sogen
             return handle_NtGdiLineTo(c, dc, left, top);
         }
 
+        // MaskBlt: like BitBlt, but a monochrome mask bitmap selects per pixel which of the two ROP3s packed
+        // into rop4 (high byte for set mask bits, low byte for clear ones) is applied. The common
+        // MAKEROP4(SRCCOPY, PATCOPY) therefore draws the source where the mask is set and the pattern where
+        // it is clear, which is how transparent icons are blitted.
+        BOOL handle_NtGdiMaskBlt(const syscall_context& c, const hdc dst_dc, const int x_dst, const int y_dst, const int width,
+                                 const int height, const hdc src_dc, const int x_src, const int y_src, const uint32_t mask_handle,
+                                 const int x_mask, const int y_mask, const DWORD rop4)
+        {
+            if (dst_dc == 0 || width <= 0 || height <= 0)
+            {
+                return FALSE;
+            }
+
+            (void)handle_NtGdiFlush(c);
+
+            int32_t dst_origin_x = 0;
+            int32_t dst_origin_y = 0;
+            uint32_t present_handle = 0;
+            gdi_bitmap_surface* dst_surface = resolve_dc_surface(c, dst_dc, dst_origin_x, dst_origin_y, present_handle);
+            if (!dst_surface || dst_surface->width == 0 || dst_surface->height == 0 || dst_surface->pixels.empty())
+            {
+                return FALSE;
+            }
+
+            const auto rop_on_mask = static_cast<uint8_t>((rop4 >> 8) & 0xFFu);
+            const auto rop_off_mask = static_cast<uint8_t>(rop4 & 0xFFu);
+            const bool needs_source = rop3_uses_source(rop_on_mask) || rop3_uses_source(rop_off_mask);
+
+            int32_t src_origin_x = 0;
+            int32_t src_origin_y = 0;
+            gdi_bitmap_surface* src_surface = nullptr;
+
+            if (needs_source)
+            {
+                uint32_t unused_present_handle = 0;
+                if (src_dc == 0)
+                {
+                    return FALSE;
+                }
+
+                src_surface = resolve_dc_surface(c, src_dc, src_origin_x, src_origin_y, unused_present_handle);
+                if (!src_surface || src_surface->width == 0 || src_surface->height == 0 || src_surface->pixels.empty())
+                {
+                    return FALSE;
+                }
+            }
+
+            const gdi_bitmap_surface* mask_surface = nullptr;
+            if (mask_handle != 0)
+            {
+                const auto mask_entry = c.proc.gdi_bitmap_surfaces.find(mask_handle);
+                if (mask_entry != c.proc.gdi_bitmap_surfaces.end())
+                {
+                    mask_surface = &mask_entry->second;
+                }
+            }
+
+            auto dx = static_cast<int64_t>(x_dst) + dst_origin_x;
+            auto dy = static_cast<int64_t>(y_dst) + dst_origin_y;
+            auto sx = static_cast<int64_t>(x_src) + src_origin_x;
+            auto sy = static_cast<int64_t>(y_src) + src_origin_y;
+            int64_t w = width;
+            int64_t h = height;
+
+            if (dx < 0)
+            {
+                const int64_t delta = -dx;
+                dx = 0;
+                sx += delta;
+                w -= delta;
+            }
+            if (dy < 0)
+            {
+                const int64_t delta = -dy;
+                dy = 0;
+                sy += delta;
+                h -= delta;
+            }
+            if (dx + w > static_cast<int64_t>(dst_surface->width))
+            {
+                w = static_cast<int64_t>(dst_surface->width) - dx;
+            }
+            if (dy + h > static_cast<int64_t>(dst_surface->height))
+            {
+                h = static_cast<int64_t>(dst_surface->height) - dy;
+            }
+            if (w <= 0 || h <= 0)
+            {
+                return TRUE;
+            }
+
+            const auto blt_width = static_cast<size_t>(w);
+            const auto blt_height = static_cast<size_t>(h);
+            const auto pixel_count = blt_width * blt_height;
+
+            std::vector<uint32_t> dst_snapshot(pixel_count);
+            std::vector<uint32_t> src_snapshot;
+            if (needs_source)
+            {
+                src_snapshot.resize(pixel_count);
+            }
+
+            for (size_t row = 0; row < blt_height; ++row)
+            {
+                const auto dst_index = (static_cast<size_t>(dy) + row) * dst_surface->width + static_cast<size_t>(dx);
+                std::memcpy(dst_snapshot.data() + row * blt_width, dst_surface->pixels.data() + dst_index, blt_width * sizeof(uint32_t));
+
+                if (needs_source)
+                {
+                    const auto src_index = (static_cast<size_t>(sy) + row) * src_surface->width + static_cast<size_t>(sx);
+                    std::memcpy(src_snapshot.data() + row * blt_width, src_surface->pixels.data() + src_index,
+                                blt_width * sizeof(uint32_t));
+                }
+            }
+
+            const uint32_t pattern = get_dc_brush_color(c, dst_dc);
+
+            for (size_t row = 0; row < blt_height; ++row)
+            {
+                auto* dst_row = dst_surface->pixels.data() + (static_cast<size_t>(dy) + row) * dst_surface->width + static_cast<size_t>(dx);
+
+                for (size_t col = 0; col < blt_width; ++col)
+                {
+                    const size_t i = row * blt_width + col;
+                    const uint32_t src = needs_source ? src_snapshot[i] : 0;
+                    const uint32_t dst = dst_snapshot[i];
+
+                    bool mask_bit = false;
+                    if (mask_surface && mask_surface->width != 0 && mask_surface->height != 0 && !mask_surface->pixels.empty())
+                    {
+                        const auto mask_x = static_cast<int64_t>(x_mask) + (sx - (x_src + src_origin_x)) + static_cast<int64_t>(col);
+                        auto mask_y = static_cast<int64_t>(y_mask) + (sy - (y_src + src_origin_y)) + static_cast<int64_t>(row);
+
+                        // Guest bitmaps are bottom-up unless their DIB says otherwise.
+                        if (!mask_surface->guest_top_down)
+                        {
+                            mask_y = static_cast<int64_t>(mask_surface->height) - 1 - mask_y;
+                        }
+
+                        if (mask_x >= 0 && mask_y >= 0 && mask_x < static_cast<int64_t>(mask_surface->width) &&
+                            mask_y < static_cast<int64_t>(mask_surface->height))
+                        {
+                            const auto mask_pixel = mask_surface->pixels[static_cast<size_t>(mask_y) * mask_surface->width +
+                                                                         static_cast<size_t>(mask_x)];
+                            mask_bit = (mask_pixel & 0x00FFFFFFu) != 0;
+                        }
+                    }
+
+                    dst_row[col] = apply_rop3(mask_bit ? rop_on_mask : rop_off_mask, src, dst, pattern) | 0xFF000000u;
+                }
+            }
+
+            present_win_surface(c, present_handle, dst_surface);
+
+            return TRUE;
+        }
+
         BOOL handle_NtGdiBitBlt(const syscall_context& c, const hdc dst_dc, const int x_dst, const int y_dst, const int width,
                                 const int height, const hdc src_dc, const int x_src, const int y_src, const DWORD rop,
                                 const DWORD /*cr_back_color*/, const FLONG /*fl*/)

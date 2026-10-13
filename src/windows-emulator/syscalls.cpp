@@ -886,6 +886,8 @@ namespace sogen
         COLORREF handle_NtGdiGetPixel(const syscall_context& c, hdc dc, int x, int y);
         BOOL handle_NtGdiBitBlt(const syscall_context& c, hdc dst_dc, int x_dst, int y_dst, int width, int height, hdc src_dc, int x_src,
                                 int y_src, DWORD rop, DWORD cr_back_color, FLONG fl);
+        BOOL handle_NtGdiMaskBlt(const syscall_context& c, hdc dst_dc, int x_dst, int y_dst, int width, int height, hdc src_dc, int x_src,
+                                 int y_src, uint32_t mask, int x_mask, int y_mask, DWORD rop4);
         BOOL handle_NtGdiStretchBlt(const syscall_context& c, hdc dst_dc, int x_dst, int y_dst, int dst_width, int dst_height, hdc src_dc,
                                     int x_src, int y_src, int src_width, int src_height, DWORD rop, DWORD cr_back_color);
         BOOL handle_NtGdiPolyPatBlt(const syscall_context& c, hdc dc, DWORD rop, emulator_pointer poly, DWORD count, DWORD mode);
@@ -1607,6 +1609,7 @@ namespace sogen
         add_handler(NtGdiPolyPolyDraw);
         add_handler(NtGdiPatBlt);
         add_handler(NtGdiBitBlt);
+        add_handler(NtGdiMaskBlt);
         add_handler(NtGdiStretchBlt);
         add_handler(NtGdiTransparentBlt);
         add_handler(NtGdiPolyPatBlt);
