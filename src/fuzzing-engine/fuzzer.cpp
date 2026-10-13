@@ -2,6 +2,8 @@
 #include <cinttypes>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
+#include <set>
 
 #include "input_generator.hpp"
 
@@ -124,9 +126,25 @@ namespace sogen::fuzzer
             return path;
         }
 
+        // A target that faults on (nearly) every input would otherwise flood the log; the reproducer file is
+        // written either way, only the hexdump is limited to inputs that were not reported yet.
+        bool report_crash(const uint64_t hash)
+        {
+            static std::mutex mutex{};
+            static std::set<uint64_t> reported{};
+
+            const std::lock_guard lock{mutex};
+            return reported.insert(hash).second;
+        }
+
         void print_crash(const std::span<const uint8_t> input)
         {
             const auto path = save_crash(input);
+
+            if (!report_crash(hash_input(input)))
+            {
+                return;
+            }
 
             // Multi-hundred-kB inputs would otherwise flood the log with a full hexdump; the file has it all.
             constexpr size_t max_dump = 256;

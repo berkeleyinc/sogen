@@ -73,18 +73,25 @@ namespace sogen
             return callbacks;
         }
 
-        void forward_emulator(windows_emulator& win_emu)
+        // Returns the address of the `vulnerable` export, or 0 if the target does not have one. Without it
+        // the whole process is re-run for every testcase instead of a single exported function.
+        uint64_t forward_emulator(windows_emulator& win_emu)
         {
             // The main modules are only mapped once the process is set up, but the fuzz target's export has
             // to be resolved before anything runs.
             win_emu.setup_process_if_necessary();
 
+            // Without the export the whole process is the target, so the run stops at its entry point to
+            // give the snapshot a started - but not yet executing - process.
             const auto target = win_emu.mod_manager.executable->find_export("vulnerable");
-            win_emu.emu().hook_memory_execution(target, [&](cpu_interface&, uint64_t) {
+            const auto stop_at = target ? target : win_emu.mod_manager.executable->entry_point;
+
+            win_emu.emu().hook_memory_execution(stop_at, [&](cpu_interface&, uint64_t) {
                 win_emu.emu().stop(); //
             });
 
             run_emulation(win_emu);
+            return target;
         }
 
         struct fuzzer_executer : fuzzer::executer
@@ -96,11 +103,15 @@ namespace sogen
             const std::function<fuzzer::coverage_functor>* handler{nullptr};
             uint64_t input_address{};
             uint64_t input_size{};
+            windows_path input_path{};
+            std::filesystem::path input_host_path{};
 
-            fuzzer_executer(const emulator_settings& settings, const std::span<const std::byte> data, const uint64_t entry)
+            fuzzer_executer(const emulator_settings& settings, const std::span<const std::byte> data, const uint64_t entry,
+                            windows_path input_path)
                 : emu(create_emulator_backend(), settings, make_callbacks()),
                   entry(entry),
-                  emulator_data(data)
+                  emulator_data(data),
+                  input_path(std::move(input_path))
             {
                 emu.emu().hook_basic_block([&](cpu_interface&, const basic_block& block) {
                     if (this->handler && visited_blocks.emplace(block.address).second)
@@ -113,13 +124,32 @@ namespace sogen
                 emu.deserialize(deserializer);
                 emu.save_snapshot();
 
-                // The testcase is handed over through the fuzz target's parameters. They have to be written
-                // from a hook: resuming reloads the active thread's registers, so values set before start()
-                // are overwritten.
-                emu.emu().hook_memory_execution(this->entry, [this](cpu_interface& cpu, uint64_t) {
-                    cpu.write_raw_register(static_cast<int>(x86_register::rcx), &this->input_address, sizeof(this->input_address));
-                    cpu.write_raw_register(static_cast<int>(x86_register::rdx), &this->input_size, sizeof(this->input_size));
-                });
+                if (!this->input_path.empty())
+                {
+                    // The testcase goes into a file the target reads. Every worker gets its own host file so
+                    // they do not overwrite each other's input while the guest is reading it.
+                    static std::atomic<uint32_t> worker_id{};
+                    const auto directory =
+                        std::filesystem::temp_directory_path() / "sogen-fuzz" / std::to_string(static_cast<uint64_t>(::getpid()));
+                    std::error_code error{};
+                    std::filesystem::create_directories(directory, error);
+
+                    this->input_host_path = directory / ("input-" + std::to_string(worker_id.fetch_add(1)) + ".bin");
+                    const std::ofstream create{this->input_host_path, std::ios::binary};
+
+                    emu.file_sys.map(this->input_path, this->input_host_path);
+                }
+
+                if (this->entry)
+                {
+                    // The testcase is handed over through the fuzz target's parameters. They have to be written
+                    // from a hook: resuming reloads the active thread's registers, so values set before start()
+                    // are overwritten.
+                    emu.emu().hook_memory_execution(this->entry, [this](cpu_interface& cpu, uint64_t) {
+                        cpu.write_raw_register(static_cast<int>(x86_register::rcx), &this->input_address, sizeof(this->input_address));
+                        cpu.write_raw_register(static_cast<int>(x86_register::rdx), &this->input_size, sizeof(this->input_size));
+                    });
+                }
 
                 const auto return_address = emu.emu().read_stack(0);
                 emu.emu().hook_memory_execution(return_address, [&](cpu_interface&, const uint64_t) {
@@ -144,26 +174,62 @@ namespace sogen
                 this->handler = &coverage_handler;
                 this->visited_blocks.clear();
 
+                if (!this->input_host_path.empty())
+                {
+                    // Delivered through a file for targets that read their input instead of taking it in
+                    // registers.
+                    std::ofstream file{this->input_host_path, std::ios::binary | std::ios::trunc};
+                    file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+                }
+
                 const auto restore_start = std::chrono::steady_clock::now();
-                restore_emulator();
-                const auto restore_end = std::chrono::steady_clock::now();
-
-                const auto memory = emu.memory.allocate_memory(
-                    static_cast<size_t>(page_align_up(std::max(data.size(), static_cast<size_t>(1)))), memory_permission::read_write);
-                emu.emu().write_memory(memory, data.data(), data.size());
-
-                this->input_address = memory;
-                this->input_size = data.size();
-
+                auto restore_end = restore_start;
                 fuzzer::execution_result result = fuzzer::execution_result::success;
 
                 try
                 {
+                    restore_emulator();
+                    restore_end = std::chrono::steady_clock::now();
+
+                    if (this->entry)
+                    {
+                        // Register delivery for targets that take the input in rcx/rdx. Whole process targets
+                        // read the file instead, so they get no extra region that could interfere with the
+                        // guest's own allocations.
+                        const auto memory =
+                            emu.memory.allocate_memory(static_cast<size_t>(page_align_up(std::max(data.size(), static_cast<size_t>(1)))),
+                                                       memory_permission::read_write);
+                        emu.emu().write_memory(memory, data.data(), data.size());
+
+                        this->input_address = memory;
+                        this->input_size = data.size();
+                    }
+
                     run_emulation(emu);
+                }
+                catch (const std::exception& e)
+                {
+                    // Worth surfacing: the emulation failure is the reason the iteration is reported as a crash.
+                    static std::atomic<uint32_t> reported{};
+                    if (reported.fetch_add(1) < 8)
+                    {
+                        fprintf(stderr, "[fuzzer] emulation failed: %s\n", e.what());
+                    }
+
+                    result = fuzzer::execution_result::error;
                 }
                 catch (...)
                 {
                     result = fuzzer::execution_result::error;
+                }
+
+                {
+                    static std::atomic<uint32_t> reported{};
+                    if (reported.fetch_add(1) < 3)
+                    {
+                        fprintf(stderr, "[fuzzer] iteration with %zu blocks, exit status %x\n", this->visited_blocks.size(),
+                                emu.process.exit_status);
+                    }
                 }
 
                 const auto run_end = std::chrono::steady_clock::now();
@@ -188,18 +254,21 @@ namespace sogen
             emulator_settings settings{};
             std::vector<std::byte> emulator_state{};
             uint64_t entry{};
+            windows_path input_path{};
             std::atomic_bool stop_fuzzing{false};
 
-            my_fuzzing_handler(emulator_settings settings, std::vector<std::byte> emulator_state, const uint64_t entry)
+            my_fuzzing_handler(emulator_settings settings, std::vector<std::byte> emulator_state, const uint64_t entry,
+                               windows_path input_path)
                 : settings(std::move(settings)),
                   emulator_state(std::move(emulator_state)),
-                  entry(entry)
+                  entry(entry),
+                  input_path(std::move(input_path))
             {
             }
 
             std::unique_ptr<fuzzer::executer> make_executer() override
             {
-                return std::make_unique<fuzzer_executer>(this->settings, emulator_state, entry);
+                return std::make_unique<fuzzer_executer>(this->settings, emulator_state, entry, input_path);
             }
 
             bool stop() override
@@ -208,14 +277,15 @@ namespace sogen
             }
         };
 
-        void run_fuzzer(const windows_emulator& base_emulator, emulator_settings settings, const uint64_t entry)
+        void run_fuzzer(const windows_emulator& base_emulator, emulator_settings settings, const uint64_t entry, windows_path input_path,
+                        size_t workers)
         {
-            const auto concurrency = std::thread::hardware_concurrency() + 4;
+            const auto concurrency = workers > 0 ? workers : (std::thread::hardware_concurrency() + 4);
 
             utils::buffer_serializer serializer{};
             base_emulator.serialize(serializer);
 
-            my_fuzzing_handler handler{std::move(settings), serializer.move_buffer(), entry};
+            my_fuzzing_handler handler{std::move(settings), serializer.move_buffer(), entry, std::move(input_path)};
 
             fuzzer::run(handler, concurrency);
         }
@@ -223,7 +293,10 @@ namespace sogen
         struct cli_options
         {
             std::filesystem::path emulation_root{};
+            std::string input_file{};
+            std::vector<std::string> arguments{};
             std::string application{};
+            size_t workers{};
             bool use_gdb{false};
         };
 
@@ -233,13 +306,18 @@ namespace sogen
                 .application = options.application,
             };
 
+            for (const auto& argument : options.arguments)
+            {
+                application_settings.arguments.emplace_back(argument.begin(), argument.end());
+            }
+
             emulator_settings settings{};
             settings.emulation_root = options.emulation_root;
 
             windows_emulator win_emu{create_emulator_backend(), std::move(application_settings), settings, make_callbacks()};
 
-            forward_emulator(win_emu);
-            run_fuzzer(win_emu, settings, win_emu.mod_manager.executable->find_export("vulnerable"));
+            const auto target = forward_emulator(win_emu);
+            run_fuzzer(win_emu, settings, target, windows_path{options.input_file}, options.workers);
         }
 
         int run_main(const int argc, char** argv)
@@ -249,6 +327,9 @@ namespace sogen
 
             cli_options options{};
             app.add_option("-e,--emulation", options.emulation_root, "Set emulation root path");
+            app.add_option("-i,--input-file", options.input_file, "Guest path the testcase is written to before every run");
+            app.add_option("-a,--arg", options.arguments, "Argument passed to the application, can be repeated");
+            app.add_option("-w,--workers", options.workers, "Number of fuzzing workers (default: hardware concurrency + 4)");
             app.add_flag("-d,--debug", options.use_gdb, "Enable GDB debugging mode");
             app.add_option("application", options.application, "The application to fuzz")->required();
 
@@ -267,6 +348,17 @@ namespace sogen
             // Progress and crash reports come from the pool's worker threads; keep them visible when stdout
             // is redirected to a file.
             setvbuf(stdout, nullptr, _IOLBF, 0);
+
+            // Every worker owns an emulator, and SDL's video subsystem is shared process wide: drive it
+            // headless unless the user asked otherwise.
+#ifdef OS_WINDOWS
+            if (std::getenv("SOGEN_UI_BACKEND") == nullptr)
+            {
+                _putenv_s("SOGEN_UI_BACKEND", "headless");
+            }
+#else
+            ::setenv("SOGEN_UI_BACKEND", "headless", 0);
+#endif
 
             try
             {
