@@ -28,6 +28,11 @@ namespace sogen
             return create_x86_64_emulator_from_environment();
         }
 
+        uint64_t max_instructions{};
+        bool press_enter{};
+
+        void press_enter_key(windows_emulator& win_emu);
+
         void run_emulation(windows_emulator& win_emu, const uint64_t budget)
         {
             bool has_exception = false;
@@ -54,6 +59,11 @@ namespace sogen
                 {
                     win_emu.start(slice_instructions);
 
+                    if (press_enter)
+                    {
+                        press_enter_key(win_emu);
+                    }
+
                     const auto executed = win_emu.get_executed_instructions() - start_instructions;
 
                     if (executed == 0 || (budget != 0 && executed >= budget))
@@ -77,7 +87,23 @@ namespace sogen
             win_emu.log.disable_output(false);
         }
 
-        uint64_t max_instructions{};
+        // GUI targets like to open a modal startup dialog (registration nags) and then sit in their message
+        // loop: send a key to the foreground window so the application gets past it.
+        void press_enter_key(windows_emulator& win_emu)
+        {
+            const auto target = win_emu.process.foreground_window;
+            if (target == 0)
+            {
+                return;
+            }
+
+            constexpr uint32_t wm_keydown = 0x0100;
+            constexpr uint32_t wm_keyup = 0x0101;
+            constexpr uint32_t vk_return = 0x0D;
+
+            win_emu.handle_ui_event(ui_event{.window = target, .message = wm_keydown, .wParam = vk_return, .lParam = 1});
+            win_emu.handle_ui_event(ui_event{.window = target, .message = wm_keyup, .wParam = vk_return, .lParam = 1});
+        }
 
         // Guest stdout is otherwise dropped on the floor, which makes a crashing target hard to diagnose.
         emulator_callbacks make_callbacks()
@@ -117,9 +143,9 @@ namespace sogen
 
             print_windows(win_emu.process);
 
-            fprintf(stderr, "[fuzzer] snapshot at %llx (target %llx, base %llx)\n",
-                    static_cast<unsigned long long>(win_emu.emu().read_instruction_pointer()), static_cast<unsigned long long>(stop_at),
-                    static_cast<unsigned long long>(win_emu.mod_manager.executable->image_base));
+            fprintf(stderr, "[fuzzer] snapshot at %zx (target %zx, base %zx)\n",
+                    static_cast<size_t>(win_emu.emu().read_instruction_pointer()), static_cast<size_t>(stop_at),
+                    static_cast<size_t>(win_emu.mod_manager.executable->image_base));
 
             return exported;
         }
@@ -395,7 +421,9 @@ namespace sogen
             std::vector<std::string> arguments{};
             std::string application{};
             std::string snapshot_at{};
+            bool press_enter{};
             uint64_t max_instructions{};
+
             size_t workers{};
             bool use_gdb{false};
         };
@@ -415,6 +443,7 @@ namespace sogen
             emulator_settings settings{};
             settings.emulation_root = options.emulation_root;
             max_instructions = options.max_instructions;
+            press_enter = options.press_enter;
 
             windows_emulator win_emu{create_emulator_backend(), std::move(application_settings), settings, make_callbacks()};
 
@@ -443,6 +472,8 @@ namespace sogen
             app.add_option("-w,--workers", options.workers, "Number of fuzzing workers (default: hardware concurrency + 4)");
             app.add_option("-s,--snapshot-at", options.snapshot_at,
                            "RVA inside the application to snapshot at instead of the `vulnerable` export");
+            app.add_flag("-p,--press-enter", options.press_enter,
+                         "Press Enter between run slices (dismisses startup dialogs of GUI targets)");
             app.add_option("-m,--max-instructions", options.max_instructions,
                            "Stop a testcase after this many instructions (0 = until the target exits)");
             app.add_option("--dump-windows", options.dump_windows, "Write the guest windows as PPM files into this directory");
