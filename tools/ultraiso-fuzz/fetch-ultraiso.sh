@@ -17,6 +17,14 @@
 #
 # `-m` is required here: UltraISO runs a message loop and never exits on its own, so a testcase has to
 # end on an instruction budget.
+#
+# Targeting the ISO loader directly is much cheaper than re-running the whole startup: `-s 0x7198`
+# snapshots at UltraISO's loader (RVA 0x7198) so every testcase only re-enters the loader, which reads
+# the file the fuzzer writes. UltraISO picks a file from the command line up with `/open` (forward
+# slash), and reaching the loader still costs the whole 32 bit wow64 start-up once:
+#
+#   FUZZ_SEEDS=<repo>/tools/ultraiso-fuzz/seeds <artifacts-dir>/fuzzer -e <root> -w 1 -m 3000000000 \
+#     -s 0x7198 -i 'c:\fuzz.iso' -a '/open' -a 'c:\fuzz.iso' c:/ultraiso/ultraiso.exe
 
 set -euo pipefail
 
