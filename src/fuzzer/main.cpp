@@ -92,9 +92,12 @@ namespace sogen
             return callbacks;
         }
 
-        // Returns the address of the `vulnerable` export, or 0 if the target does not have one. Without it
-        // the whole process is re-run for every testcase instead of a single exported function.
-        uint64_t forward_emulator(windows_emulator& win_emu)
+        void print_windows(const process_context& process);
+
+        // Returns the address of the `vulnerable` export, or 0 if the target does not have one - only an
+        // export gets the testcase through rcx/rdx. `snapshot_at` (an RVA in the application) takes
+        // precedence and is the address the snapshot is taken at.
+        uint64_t forward_emulator(windows_emulator& win_emu, const uint64_t snapshot_at)
         {
             // The main modules are only mapped once the process is set up, but the fuzz target's export has
             // to be resolved before anything runs.
@@ -102,7 +105,8 @@ namespace sogen
 
             // Without the export the whole process is the target, so the run stops at its entry point to
             // give the snapshot a started - but not yet executing - process.
-            const auto target = win_emu.mod_manager.executable->find_export("vulnerable");
+            const auto exported = win_emu.mod_manager.executable->find_export("vulnerable");
+            const auto target = snapshot_at != 0 ? snapshot_at : exported;
             const auto stop_at = target ? target : win_emu.mod_manager.executable->entry_point;
 
             win_emu.emu().hook_memory_execution(stop_at, [&](cpu_interface&, uint64_t) {
@@ -110,7 +114,14 @@ namespace sogen
             });
 
             run_emulation(win_emu, max_instructions);
-            return target;
+
+            print_windows(win_emu.process);
+
+            fprintf(stderr, "[fuzzer] snapshot at %llx (target %llx, base %llx)\n",
+                    static_cast<unsigned long long>(win_emu.emu().read_instruction_pointer()), static_cast<unsigned long long>(stop_at),
+                    static_cast<unsigned long long>(win_emu.mod_manager.executable->image_base));
+
+            return exported;
         }
 
         void write_ppm(const std::filesystem::path& path, const uint32_t width, const uint32_t height, const std::vector<uint32_t>& pixels)
@@ -123,6 +134,29 @@ namespace sogen
                 const std::array<char, 3> rgb = {static_cast<char>((pixel >> 16) & 0xFF), static_cast<char>((pixel >> 8) & 0xFF),
                                                  static_cast<char>(pixel & 0xFF)};
                 file.write(rgb.data(), rgb.size());
+            }
+        }
+
+        std::string to_ascii(const std::u16string& text)
+        {
+            std::string result{};
+
+            for (const auto character : text)
+            {
+                result += (character >= 32 && character < 127) ? static_cast<char>(character) : '?';
+            }
+
+            return result;
+        }
+
+        void print_windows(const process_context& process)
+        {
+            for (const auto& entry : process.windows)
+            {
+                const auto& window = entry.second;
+                fprintf(stderr, "[fuzzer] window '%s' class='%s' %dx%d at %d,%d style=%08x visible=%d\n", to_ascii(window.name).c_str(),
+                        to_ascii(window.class_name).c_str(), window.width, window.height, window.x, window.y, window.style,
+                        (window.style & 0x10000000u) != 0);
             }
         }
 
@@ -360,6 +394,7 @@ namespace sogen
             std::string input_file{};
             std::vector<std::string> arguments{};
             std::string application{};
+            std::string snapshot_at{};
             uint64_t max_instructions{};
             size_t workers{};
             bool use_gdb{false};
@@ -383,7 +418,16 @@ namespace sogen
 
             windows_emulator win_emu{create_emulator_backend(), std::move(application_settings), settings, make_callbacks()};
 
-            const auto target = forward_emulator(win_emu);
+            // The main modules are only mapped once the process is set up.
+            win_emu.setup_process_if_necessary();
+
+            uint64_t snapshot_at = 0;
+            if (!options.snapshot_at.empty())
+            {
+                snapshot_at = win_emu.mod_manager.executable->image_base + std::stoull(options.snapshot_at, nullptr, 0);
+            }
+
+            const auto target = forward_emulator(win_emu, snapshot_at);
             run_fuzzer(win_emu, settings, target, windows_path{options.input_file}, options.workers, options.dump_windows);
         }
 
@@ -397,6 +441,8 @@ namespace sogen
             app.add_option("-i,--input-file", options.input_file, "Guest path the testcase is written to before every run");
             app.add_option("-a,--arg", options.arguments, "Argument passed to the application, can be repeated");
             app.add_option("-w,--workers", options.workers, "Number of fuzzing workers (default: hardware concurrency + 4)");
+            app.add_option("-s,--snapshot-at", options.snapshot_at,
+                           "RVA inside the application to snapshot at instead of the `vulnerable` export");
             app.add_option("-m,--max-instructions", options.max_instructions,
                            "Stop a testcase after this many instructions (0 = until the target exits)");
             app.add_option("--dump-windows", options.dump_windows, "Write the guest windows as PPM files into this directory");
